@@ -101,6 +101,18 @@ a { text-underline-offset: 0.2em; }
 .portal-card:hover::after { background: rgba(224,169,74,0.13); }
 .icon-box { display: grid; height: 3.5rem; width: 3.5rem; place-items: center; border: 1px solid rgba(224,169,74,0.22); border-radius: 1rem; background: rgba(224,169,74,0.06); color: #e0a94a; }
 
+.learning-card {
+  display: flex;
+  min-height: 29rem;
+  flex-direction: column;
+  border: 1px solid rgba(255,255,255,0.09);
+  border-radius: 1.5rem;
+  background: linear-gradient(160deg, rgba(224,169,74,0.055), rgba(255,255,255,0.014) 46%);
+  padding: 2rem;
+  transition: transform 300ms ease, border-color 300ms ease, box-shadow 300ms ease;
+}
+.learning-card:hover { transform: translateY(-4px); border-color: rgba(224,169,74,0.3); box-shadow: 0 20px 65px rgba(0,0,0,0.24), 0 0 42px rgba(224,169,74,0.05); }
+
 .signal-card {
   min-height: 25rem;
   border: 1px solid rgba(255,255,255,0.09);
@@ -139,6 +151,7 @@ footer a { transition: color 180ms ease; }
 @media (min-width: 768px) {
   .section-shell { padding-left: 2.5rem; padding-right: 2.5rem; }
   .portal-card { padding: 2.75rem; }
+  .learning-card { padding: 2.5rem; }
   .signal-card { padding: 2.5rem; }
 }
 
@@ -155,5 +168,5 @@ footer a { transition: color 180ms ease; }
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
   .vanta-shell { background: radial-gradient(circle at 65% 40%, rgba(224,169,74,0.13), transparent 43%), #0a0806; }
-  .button, .portal-card, .signal-card { transition: none; }
+  .button, .portal-card, .learning-card, .signal-card { transition: none; }
 }

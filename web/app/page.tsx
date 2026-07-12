@@ -36,6 +36,33 @@ function TeacherIcon() {
   );
 }
 
+function QuizIcon() {
+  return (
+    <svg viewBox="0 0 64 64" fill="none" aria-hidden="true" className="h-8 w-8">
+      <path d="M18 11h28a6 6 0 0 1 6 6v30a6 6 0 0 1-6 6H18a6 6 0 0 1-6-6V17a6 6 0 0 1 6-6Z" stroke="currentColor" strokeWidth="1.8" />
+      <path d="m21 27 4 4 8-9M21 43h10M38 27h7M38 43h7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function PodcastIcon() {
+  return (
+    <svg viewBox="0 0 64 64" fill="none" aria-hidden="true" className="h-8 w-8">
+      <rect x="22" y="9" width="20" height="34" rx="10" stroke="currentColor" strokeWidth="1.8" />
+      <path d="M15 31a17 17 0 0 0 34 0M32 48v8M24 56h16" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function VoiceIcon() {
+  return (
+    <svg viewBox="0 0 64 64" fill="none" aria-hidden="true" className="h-8 w-8">
+      <path d="M13 37h8l11 9V18l-11 9h-8v10Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+      <path d="M41 25c4 4 4 10 0 14M47 19c8 7 8 19 0 26" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 function LockedInMascot() {
   return (
     <svg
@@ -84,6 +111,7 @@ export default function Home() {
       >
         <Wordmark />
         <div className="flex items-center gap-4 sm:gap-8">
+          <a href="#study-your-way" className="hidden text-sm text-stone-300 transition-colors hover:text-white md:block">Study Your Way</a>
           <a href="#teachers" className="hidden text-sm text-stone-300 transition-colors hover:text-white sm:block">For Teachers</a>
           <a href="#demo" className="button button-primary text-sm">Try the Demo</a>
         </div>
@@ -187,6 +215,65 @@ export default function Home() {
         </div>
       </section>
 
+      <section id="study-your-way" className="section-shell relative z-10">
+        <motion.div
+          initial={initial}
+          whileInView="visible"
+          viewport={{ once: true, amount: 0.35 }}
+          variants={reveal}
+          className="max-w-4xl"
+        >
+          <p className="eyebrow">MORE THAN A RECAP</p>
+          <h2 className="section-title mt-5">
+            Learn it in the format that <span className="text-gold">makes it click.</span>
+          </h2>
+          <p className="mt-7 max-w-2xl text-base leading-7 text-stone-400 md:text-lg md:leading-8">
+            Turn the same private, on-device lesson context into a quick knowledge check, a podcast-style explanation, or a voice you enjoy listening to.
+          </p>
+        </motion.div>
+
+        <div className="mt-12 grid gap-5 lg:grid-cols-3">
+          {[
+            {
+              label: "QUIZ ME",
+              title: "Prove you got it",
+              body: "Generate a short quiz from the lesson, answer one question at a time, and get a clear explanation whenever you miss one.",
+              detail: "Questions adapt to what you need to review.",
+              icon: <QuizIcon />,
+            },
+            {
+              label: "PODCAST MODE",
+              title: "Hear the big picture",
+              body: "Transform dense class material into a natural back-and-forth conversation that connects the ideas and makes them easier to remember.",
+              detail: "Perfect for the walk home or a study break.",
+              icon: <PodcastIcon />,
+            },
+            {
+              label: "VOICE CHOICE",
+              title: "A voice you’ll remember",
+              body: "Choose from expressive narrator styles—or authorized voices from participating creators and celebrities—to make every explanation more engaging.",
+              detail: "Think iconic pop-star energy, always licensed and clearly labeled.",
+              icon: <VoiceIcon />,
+            },
+          ].map((feature, index) => (
+            <motion.article
+              key={feature.label}
+              initial={initial}
+              whileInView="visible"
+              viewport={{ once: true, amount: 0.2 }}
+              variants={{ hidden: { opacity: 0, y: 26 }, visible: { opacity: 1, y: 0, transition: { duration: 0.7, delay: index * 0.1, ease } } }}
+              className="learning-card"
+            >
+              <div className="icon-box">{feature.icon}</div>
+              <p className="mt-9 text-xs font-semibold tracking-[0.22em] text-gold">{feature.label}</p>
+              <h3 className="mt-4 font-serif text-3xl leading-tight tracking-[-0.035em] text-stone-50">{feature.title}</h3>
+              <p className="mt-5 text-base leading-7 text-stone-400">{feature.body}</p>
+              <p className="mt-auto border-t border-white/[0.08] pt-6 text-sm leading-6 text-stone-500">{feature.detail}</p>
+            </motion.article>
+          ))}
+        </div>
+      </section>
+
       <section id="teachers" className="section-shell relative z-10">
         <motion.h2 initial={initial} whileInView="visible" viewport={{ once: true, amount: 0.6 }} variants={reveal} className="section-title max-w-4xl">
           One button. Two sides of the <span className="text-gold">same moment.</span>
@@ -227,7 +314,9 @@ export default function Home() {
       <footer className="relative z-10 border-t border-white/[0.08]">
         <div className="mx-auto flex max-w-7xl flex-col gap-8 px-6 py-10 md:px-10 lg:flex-row lg:items-center lg:justify-between">
           <Wordmark />
-          <p className="max-w-2xl text-sm leading-6 text-stone-500">Built for [hackathon name] — on-device, privacy-first, built by a 14-year-old who&apos;s been lost in class too.</p>
+          <p className="max-w-2xl text-sm leading-6 text-stone-500">
+            Built by Nitin and Rishab—two creative 14-year-old problem solvers turning smart ideas into meaningful solutions.
+          </p>
           <div className="flex gap-6 text-sm text-stone-300">
             <a href="#" className="hover:text-gold">GitHub repo</a>
             <a href="#" className="hover:text-gold">Devpost</a>
