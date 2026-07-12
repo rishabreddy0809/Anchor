@@ -7,6 +7,7 @@ export type LectureAnalysis = {
     homework: Array<{ task: string; deadline: string | null; evidence: string }>;
     actionItems: string[]; flashcards: Array<{ front: string; back: string }>;
     quiz: Array<{ question: string; answer: string; explanation: string }>;
+    podcastScript: string;
     limitations: string[]; confidence: number;
   };
   models: { transcription: string; analysis: string };

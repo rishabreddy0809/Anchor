@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
-const GEMINI_MODEL = "gemini-2.0-flash";
+const GEMINI_MODEL = process.env.GEMINI_ANALYSIS_MODEL || "gemini-3.5-flash";
 const TRANSCRIBE_PROMPT =
   "Transcribe the following audio exactly as spoken. Return only the transcript text, with no additional commentary or formatting. If there is no discernible speech, return an empty string.";
 
@@ -31,7 +31,7 @@ export async function POST(req: NextRequest) {
           {
             parts: [
               { text: TRANSCRIBE_PROMPT },
-              { inline_data: { mime_type: "audio/webm", data: base64Audio } },
+              { inlineData: { mimeType: audio.type || "audio/webm", data: base64Audio } },
             ],
           },
         ],

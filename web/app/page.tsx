@@ -113,6 +113,7 @@ export default function Home() {
         <Wordmark />
         <div className="flex items-center gap-4 sm:gap-8">
           <a href="#study-your-way" className="hidden text-sm text-stone-300 transition-colors hover:text-white md:block">Study Your Way</a>
+          <Link href="/student" className="hidden text-sm text-stone-300 transition-colors hover:text-white sm:block">For Students</Link>
           <Link href="/teacher" className="hidden text-sm text-stone-300 transition-colors hover:text-white sm:block">For Teachers</Link>
           <a href="#demo" className="button button-primary text-sm">Try the Demo</a>
         </div>
