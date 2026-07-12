@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
-const GEMINI_MODEL = "gemini-2.0-flash";
+const GEMINI_MODEL = "gemini-flash-latest";
 const TRANSCRIBE_PROMPT =
   "Transcribe the following audio exactly as spoken. Return only the transcript text, with no additional commentary or formatting. If there is no discernible speech, return an empty string.";
 
