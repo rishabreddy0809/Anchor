@@ -32,6 +32,7 @@ const TRANSCRIPT_SYNC_MS = 4000;
 const RECORDING_CHUNK_MS = 7000;
 
 type TranscriptChunk = { text: string; ts: number };
+type Ping = { ts: number; topic: string; summary: string };
 
 function generateSessionCode() {
   const letters = "ABCDEFGHJKLMNPQRSTUVWXYZ";
@@ -60,6 +61,17 @@ function buildBuckets(pingTimes: number[], now: number) {
   }));
 }
 
+function buildTopicCounts(pings: Ping[]) {
+  const counts = new Map<string, number>();
+  for (const ping of pings) {
+    if (!ping.topic) continue;
+    counts.set(ping.topic, (counts.get(ping.topic) ?? 0) + 1);
+  }
+  return Array.from(counts.entries())
+    .map(([topic, count]) => ({ topic, count }))
+    .sort((a, b) => b.count - a.count);
+}
+
 type ConnectionState = "connecting" | "connected" | "error";
 
 export default function TeacherDashboard() {
@@ -68,7 +80,7 @@ export default function TeacherDashboard() {
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
 
-  const [pingTimes, setPingTimes] = useState<number[]>([]);
+  const [pings, setPings] = useState<Ping[]>([]);
   const [connectionState, setConnectionState] = useState<ConnectionState>("connecting");
   const [now, setNow] = useState(() => Date.now());
 
@@ -207,13 +219,15 @@ export default function TeacherDashboard() {
       (snapshot) => {
         if (unsubscribed) return;
         setConnectionState("connected");
-        const times = snapshot.docs
+        const nextPings = snapshot.docs
           .map((d) => {
-            const ts = d.data().createdAt as Timestamp | undefined;
-            return ts ? ts.toMillis() : null;
+            const data = d.data() as { createdAt?: Timestamp; topic?: string; summary?: string };
+            const ts = data.createdAt ? data.createdAt.toMillis() : null;
+            if (ts === null) return null;
+            return { ts, topic: data.topic ?? "", summary: data.summary ?? "" };
           })
-          .filter((t): t is number => t !== null);
-        setPingTimes(times);
+          .filter((p): p is Ping => p !== null);
+        setPings(nextPings);
       },
       () => {
         if (!unsubscribed) setConnectionState("error");
@@ -227,12 +241,15 @@ export default function TeacherDashboard() {
   }, [sessionCode]);
 
   const catchUpsLastFiveMin = useMemo(
-    () => pingTimes.filter((t) => t >= now - FIVE_MIN_MS).length,
-    [pingTimes, now]
+    () => pings.filter((p) => p.ts >= now - FIVE_MIN_MS).length,
+    [pings, now]
   );
 
+  const pingTimes = useMemo(() => pings.map((p) => p.ts), [pings]);
   const chartData = useMemo(() => buildBuckets(pingTimes, now), [pingTimes, now]);
-  const hasAnyPings = pingTimes.length > 0;
+  const hasAnyPings = pings.length > 0;
+
+  const topicCounts = useMemo(() => buildTopicCounts(pings), [pings]);
 
   async function handleCreateSession(e: React.FormEvent) {
     e.preventDefault();
@@ -418,6 +435,43 @@ export default function TeacherDashboard() {
                   <Bar dataKey="count" name="Catch-ups" fill="#e0a94a" radius={[6, 6, 0, 0]} maxBarSize={36} />
                 </BarChart>
               </ResponsiveContainer>
+            )}
+          </div>
+        </section>
+
+        <section className="signal-card mt-8">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-xs font-semibold tracking-[0.22em] text-gold">KNOWLEDGE GRAPH</p>
+              <h2 className="mt-3 font-serif text-2xl tracking-[-0.03em] text-stone-50">
+                Topics students are stuck on · last 15 min
+              </h2>
+            </div>
+          </div>
+
+          <div className="mt-8">
+            {topicCounts.length === 0 ? (
+              <div className="flex flex-col items-center justify-center gap-3 py-10 text-center">
+                <span className="status-pill">
+                  <span className="status-dot" />
+                  Live
+                </span>
+                <p className="text-lg text-stone-400">No topics flagged yet.</p>
+              </div>
+            ) : (
+              <ul className="flex flex-col gap-3">
+                {topicCounts.map(({ topic, count }) => (
+                  <li
+                    key={topic}
+                    className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/[0.03] px-5 py-4"
+                  >
+                    <span className="font-serif text-lg tracking-[-0.01em] text-stone-50">{topic}</span>
+                    <span className="text-sm font-semibold text-gold">
+                      {count} student{count === 1 ? "" : "s"} confused
+                    </span>
+                  </li>
+                ))}
+              </ul>
             )}
           </div>
         </section>
