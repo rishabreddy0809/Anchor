@@ -16,7 +16,7 @@ enum OllamaService {
     }
 
     static var model: String {
-        UserDefaults.standard.string(forKey: "ollamaModel") ?? "llama3.2"
+        UserDefaults.standard.string(forKey: "ollamaModel") ?? "deepseek-r1:8b"
     }
 
     enum OllamaError: LocalizedError {
@@ -83,40 +83,86 @@ enum OllamaService {
             }
             let message: Message
         }
-        let content = (try? JSONDecoder().decode(ChatResponse.self, from: data))?
-            .message.content
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let raw = (try? JSONDecoder().decode(ChatResponse.self, from: data))?.message.content ?? ""
+        let content = stripThinking(raw)
         guard !content.isEmpty else { throw OllamaError.emptyResponse }
         return content
     }
 
-    /// Otter-style structured notes: overview, key ideas, and action items,
-    /// enforced with a JSON schema so the reply always decodes.
+    /// Reasoning models like DeepSeek R1 emit `<think>…</think>` blocks
+    /// before the actual answer (on older Ollama versions they land in the
+    /// message content). Remove them so only the answer remains.
+    private static func stripThinking(_ text: String) -> String {
+        var result = text
+        while let start = result.range(of: "<think>"),
+              let end = result.range(of: "</think>"),
+              start.lowerBound < end.upperBound {
+            result.removeSubrange(start.lowerBound..<end.upperBound)
+        }
+        // Some replies omit the opening tag; drop everything up to the close.
+        if let end = result.range(of: "</think>") {
+            result.removeSubrange(result.startIndex..<end.upperBound)
+        }
+        return result.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Otter-style structured study notes: overview, key-idea bullets,
+    /// vocabulary, practice quiz questions, and action items. Enforced with
+    /// a JSON schema so the reply always decodes.
     static func insights(for transcript: String) async throws -> SessionInsights {
         let schema: [String: Any] = [
             "type": "object",
             "properties": [
                 "overview": ["type": "string"],
                 "keyPoints": ["type": "array", "items": ["type": "string"]],
+                "vocabulary": [
+                    "type": "array",
+                    "items": [
+                        "type": "object",
+                        "properties": [
+                            "term": ["type": "string"],
+                            "definition": ["type": "string"],
+                        ],
+                        "required": ["term", "definition"],
+                    ],
+                ],
+                "quizQuestions": [
+                    "type": "array",
+                    "items": [
+                        "type": "object",
+                        "properties": [
+                            "question": ["type": "string"],
+                            "answer": ["type": "string"],
+                        ],
+                        "required": ["question", "answer"],
+                    ],
+                ],
                 "actionItems": ["type": "array", "items": ["type": "string"]],
             ],
-            "required": ["overview", "keyPoints", "actionItems"],
+            "required": ["overview", "keyPoints", "vocabulary", "quizQuestions", "actionItems"],
         ]
 
         let content = try await chat(
             system: """
                 You turn class lecture transcripts into structured study notes. \
                 The transcript is auto-generated and may contain transcription errors. \
-                Respond in JSON with: "overview" (a 2-3 sentence summary of the session), \
-                "keyPoints" (4-8 short bullet points covering the key ideas, definitions, \
-                and concepts), and "actionItems" (homework, readings, exam dates, or \
-                things the teacher said to do — an empty array if there are none).
+                Respond in JSON with: \
+                "overview" — a 2-3 sentence summary of the session. \
+                "keyPoints" — 4-8 short bullet points covering the key ideas and concepts. \
+                "vocabulary" — the important terms from the lecture, each with a one-sentence definition (empty array if none). \
+                "quizQuestions" — 3-5 practice questions a student could use to test themselves, each with a concise answer. \
+                "actionItems" — homework, readings, exam dates, or things the teacher said to do (empty array if none).
                 """,
             user: "Transcript:\n\n\(transcript)",
             schema: schema
         )
 
-        guard let data = content.data(using: .utf8) else {
+        // Even with the schema, be defensive: pull out the outermost JSON
+        // object in case the model wrapped it in extra text.
+        guard let start = content.firstIndex(of: "{"),
+              let end = content.lastIndex(of: "}"),
+              start < end,
+              let data = String(content[start...end]).data(using: .utf8) else {
             throw OllamaError.emptyResponse
         }
         return try JSONDecoder().decode(SessionInsights.self, from: data)
