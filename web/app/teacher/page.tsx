@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Timestamp,
   collection,
@@ -25,8 +25,13 @@ import { db } from "../../lib/firebase";
 
 const FIVE_MIN_MS = 5 * 60 * 1000;
 const FIFTEEN_MIN_MS = 15 * 60 * 1000;
+const THREE_MIN_MS = 3 * 60 * 1000;
 const BUCKET_MS = 60 * 1000;
 const BUCKET_COUNT = 15;
+const TRANSCRIPT_SYNC_MS = 4000;
+const RECORDING_CHUNK_MS = 7000;
+
+type TranscriptChunk = { text: string; ts: number };
 
 function generateSessionCode() {
   const letters = "ABCDEFGHJKLMNPQRSTUVWXYZ";
@@ -67,10 +72,122 @@ export default function TeacherDashboard() {
   const [connectionState, setConnectionState] = useState<ConnectionState>("connecting");
   const [now, setNow] = useState(() => Date.now());
 
+  const [audioState, setAudioState] = useState<"idle" | "requesting" | "active">("idle");
+  const [audioError, setAudioError] = useState<string | null>(null);
+  const displayStreamRef = useRef<MediaStream | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const transcriptChunksRef = useRef<TranscriptChunk[]>([]);
+  const syncIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
   useEffect(() => {
     const tick = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(tick);
   }, []);
+
+  function stopCapture() {
+    try {
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+        mediaRecorderRef.current.stop();
+      }
+    } catch {
+      // already stopped
+    }
+    mediaRecorderRef.current = null;
+    if (syncIntervalRef.current) {
+      clearInterval(syncIntervalRef.current);
+      syncIntervalRef.current = null;
+    }
+    displayStreamRef.current?.getTracks().forEach((track) => track.stop());
+    displayStreamRef.current = null;
+    transcriptChunksRef.current = [];
+    setAudioState("idle");
+  }
+
+  useEffect(() => {
+    return () => {
+      try {
+        if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+          mediaRecorderRef.current.stop();
+        }
+      } catch {
+        // already stopped
+      }
+      displayStreamRef.current?.getTracks().forEach((track) => track.stop());
+      if (syncIntervalRef.current) clearInterval(syncIntervalRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function handleShareTabAudio() {
+    if (!sessionCode || audioState !== "idle") return;
+    setAudioError(null);
+    setAudioState("requesting");
+
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+    } catch (err) {
+      setAudioState("idle");
+      const name = err instanceof DOMException ? err.name : "";
+      if (name !== "NotAllowedError" && name !== "AbortError") {
+        setAudioError("Couldn't start tab audio sharing. Please try again.");
+      }
+      return;
+    }
+
+    if (stream.getAudioTracks().length === 0) {
+      stream.getTracks().forEach((track) => track.stop());
+      setAudioState("idle");
+      setAudioError('No audio was captured — when sharing, make sure to check "Share tab audio."');
+      return;
+    }
+
+    if (!MediaRecorder.isTypeSupported("audio/webm")) {
+      stream.getTracks().forEach((track) => track.stop());
+      setAudioState("idle");
+      setAudioError("This browser doesn't support the audio format needed for transcription. Try Chrome.");
+      return;
+    }
+
+    displayStreamRef.current = stream;
+    stream.getVideoTracks()[0]?.addEventListener("ended", stopCapture);
+
+    const audioStream = new MediaStream(stream.getAudioTracks());
+    const recorder = new MediaRecorder(audioStream, { mimeType: "audio/webm" });
+
+    recorder.ondataavailable = async (event) => {
+      if (event.data.size === 0) return;
+      try {
+        const formData = new FormData();
+        formData.append("audio", event.data, "chunk.webm");
+        const res = await fetch("/api/transcribe", { method: "POST", body: formData });
+        if (!res.ok) return;
+        const { text } = (await res.json()) as { text?: string };
+        if (text && text.trim()) {
+          transcriptChunksRef.current.push({ text: text.trim(), ts: Date.now() });
+        }
+      } catch {
+        // drop this chunk, keep the pipeline running
+      }
+    };
+
+    recorder.onerror = () => {
+      setAudioError("Recording failed, so live transcription stopped.");
+      stopCapture();
+    };
+
+    mediaRecorderRef.current = recorder;
+    recorder.start(RECORDING_CHUNK_MS);
+
+    syncIntervalRef.current = setInterval(() => {
+      const cutoff = Date.now() - THREE_MIN_MS;
+      transcriptChunksRef.current = transcriptChunksRef.current.filter((chunk) => chunk.ts >= cutoff);
+      const liveTranscript = transcriptChunksRef.current.map((chunk) => chunk.text).join(" ");
+      setDoc(doc(db, "sessions", sessionCode), { liveTranscript }, { merge: true }).catch(() => {});
+    }, TRANSCRIPT_SYNC_MS);
+
+    setAudioState("active");
+  }
 
   useEffect(() => {
     if (!sessionCode) return;
@@ -203,12 +320,38 @@ export default function TeacherDashboard() {
                 {connectionState === "connecting" && "Connecting…"}
                 {connectionState === "error" && "Connection error"}
               </span>
+              {audioState === "active" && (
+                <span className="status-pill">
+                  <span className="status-dot" />
+                  Capturing Audio
+                </span>
+              )}
             </div>
             <p className="max-w-md text-sm leading-6 text-stone-400">
               Have students enter this code in Anchor to join the session.
             </p>
+
+            <button
+              type="button"
+              onClick={audioState === "active" ? stopCapture : handleShareTabAudio}
+              disabled={audioState === "requesting"}
+              className="button button-secondary text-sm disabled:opacity-60"
+            >
+              {audioState === "active" && "Stop Sharing"}
+              {audioState === "requesting" && "Requesting…"}
+              {audioState === "idle" && "Share Tab Audio"}
+            </button>
+            <p className="max-w-sm text-xs leading-5 text-stone-500">
+              Select your Zoom/Meet tab and check &quot;Share tab audio&quot; to enable live transcription.
+            </p>
           </div>
         </header>
+
+        {audioError && (
+          <div className="mx-auto mt-6 max-w-lg rounded-2xl border border-red-500/30 bg-red-500/[0.06] px-5 py-3 text-center text-sm text-red-300">
+            {audioError}
+          </div>
+        )}
 
         {connectionState === "error" && (
           <div className="mx-auto mt-8 max-w-lg rounded-2xl border border-red-500/30 bg-red-500/[0.06] px-5 py-3 text-center text-sm text-red-300">
