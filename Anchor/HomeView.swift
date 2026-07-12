@@ -389,6 +389,10 @@ private struct SessionRow: View {
                 if let insights = session.insights {
                     Image(systemName: "sparkles")
                     Text("\(insights.keyPoints.count) key ideas")
+                    if let quiz = insights.quizQuestions, !quiz.isEmpty {
+                        Text("·")
+                        Text("\(quiz.count) quiz Qs")
+                    }
                     if !insights.actionItems.isEmpty {
                         Text("·")
                         Text("\(insights.actionItems.count) action items")
@@ -415,6 +419,8 @@ struct SessionDetailView: View {
     let session: RecordingSession
     @ObservedObject var store: SessionStore
     @Environment(\.dismiss) private var dismiss
+    @State private var isGeneratingNotes = false
+    @State private var notesError: String?
 
     /// Live copy so the recap appears when background generation finishes.
     private var current: RecordingSession {
@@ -449,10 +455,31 @@ struct SessionDetailView: View {
                         Text(overview)
                             .font(.body)
                             .lineSpacing(4)
+                    } else if isGeneratingNotes {
+                        HStack(spacing: 10) {
+                            ProgressView()
+                            Text("Generating study notes…")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
                     } else {
-                        Text("AI notes are still generating — check back in a moment. (Make sure Ollama is running.)")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
+                        if let notesError {
+                            Text(notesError)
+                                .font(.subheadline)
+                                .foregroundStyle(.red)
+                        } else {
+                            Text("No study notes yet for this session.")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
+                        Button {
+                            generateNotes()
+                        } label: {
+                            Label("Generate Study Notes", systemImage: "sparkles")
+                                .font(.system(.subheadline, design: .rounded, weight: .semibold))
+                        }
+                        .buttonStyle(.glassProminent)
+                        .tint(.indigo)
                     }
                 }
                 .padding(16)
@@ -479,6 +506,41 @@ struct SessionDetailView: View {
                     .padding(16)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 18))
+
+                    if let vocabulary = insights.vocabulary, !vocabulary.isEmpty {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Label("Vocabulary", systemImage: "character.book.closed.fill")
+                                .font(.system(.headline, design: .rounded))
+                                .foregroundStyle(.purple)
+                            ForEach(vocabulary, id: \.term) { entry in
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(entry.term)
+                                        .font(.system(.subheadline, design: .rounded, weight: .bold))
+                                    Text(entry.definition)
+                                        .font(.subheadline)
+                                        .foregroundStyle(.secondary)
+                                        .lineSpacing(2)
+                                }
+                            }
+                        }
+                        .padding(16)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.purple.opacity(0.08), in: RoundedRectangle(cornerRadius: 18))
+                    }
+
+                    if let quiz = insights.quizQuestions, !quiz.isEmpty {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Label("Quiz Yourself", systemImage: "questionmark.circle.fill")
+                                .font(.system(.headline, design: .rounded))
+                                .foregroundStyle(.blue)
+                            ForEach(quiz, id: \.question) { item in
+                                QuizQuestionRow(item: item)
+                            }
+                        }
+                        .padding(16)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.blue.opacity(0.08), in: RoundedRectangle(cornerRadius: 18))
+                    }
 
                     if !insights.actionItems.isEmpty {
                         VStack(alignment: .leading, spacing: 12) {
@@ -529,6 +591,62 @@ struct SessionDetailView: View {
                 }
             }
         }
+    }
+
+    private func generateNotes() {
+        isGeneratingNotes = true
+        notesError = nil
+        Task {
+            do {
+                let insights = try await OllamaService.insights(for: current.transcript)
+                store.updateInsights(id: session.id, insights: insights)
+            } catch {
+                notesError = error.localizedDescription
+            }
+            isGeneratingNotes = false
+        }
+    }
+}
+
+/// One practice question with a tap-to-reveal answer.
+private struct QuizQuestionRow: View {
+    let item: QuizItem
+    @State private var showAnswer = false
+
+    var body: some View {
+        Button {
+            withAnimation(.spring(duration: 0.3)) {
+                showAnswer.toggle()
+            }
+        } label: {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(item.question)
+                        .font(.subheadline.weight(.medium))
+                        .multilineTextAlignment(.leading)
+                    Spacer(minLength: 8)
+                    Image(systemName: showAnswer ? "chevron.up" : "chevron.down")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                if showAnswer {
+                    Text(item.answer)
+                        .font(.subheadline)
+                        .foregroundStyle(.blue)
+                        .multilineTextAlignment(.leading)
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                } else {
+                    Text("Tap to reveal answer")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.primary)
     }
 }
 

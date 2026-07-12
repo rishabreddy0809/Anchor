@@ -1,8 +1,6 @@
 //
 //  AnchorApp.swift
-//  Anchor
-//
-//  Created by Rishab Reddy Paili on 7/11/26.
+//  Anchor (Echor)
 //
 
 import SwiftUI

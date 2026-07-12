@@ -1,21 +1,24 @@
 //
 //  ContentView.swift
-//  Anchor
+//  Anchor (Echor)
 //
-//  Created by Rishab Reddy Paili on 7/11/26.
+//  Shows onboarding on first launch, then the home screen. Posture
+//  monitoring lives in the home screen's top-right status chip.
 //
 
 import SwiftUI
 
 struct ContentView: View {
+    @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding = false
+
     var body: some View {
-        VStack {
-            Image(systemName: "globe")
-                .imageScale(.large)
-                .foregroundStyle(.tint)
-            Text("Hello, world!")
+        if hasCompletedOnboarding {
+            HomeView()
+                .transition(.opacity)
+        } else {
+            OnboardingView()
+                .transition(.opacity)
         }
-        .padding()
     }
 }
 

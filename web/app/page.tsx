@@ -1,6 +1,7 @@
 "use client";
 
 import { motion, useReducedMotion } from "framer-motion";
+import Link from "next/link";
 import VantaRingsBackground from "../components/VantaRingsBackground";
 
 const ease = [0.22, 1, 0.36, 1] as const;
@@ -112,7 +113,7 @@ export default function Home() {
         <Wordmark />
         <div className="flex items-center gap-4 sm:gap-8">
           <a href="#study-your-way" className="hidden text-sm text-stone-300 transition-colors hover:text-white md:block">Study Your Way</a>
-          <a href="#teachers" className="hidden text-sm text-stone-300 transition-colors hover:text-white sm:block">For Teachers</a>
+          <Link href="/teacher" className="hidden text-sm text-stone-300 transition-colors hover:text-white sm:block">For Teachers</Link>
           <a href="#demo" className="button button-primary text-sm">Try the Demo</a>
         </div>
       </motion.nav>
