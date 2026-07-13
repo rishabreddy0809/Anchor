@@ -1,12 +1,13 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import {
-  addDoc,
-  collection,
   doc,
+  increment,
   onSnapshot,
   serverTimestamp,
+  writeBatch,
 } from "firebase/firestore";
 import { db } from "../../../lib/firebase";
 
@@ -14,6 +15,8 @@ const STUDENT_ID_KEY = "anchor-student-id";
 
 type SessionState = "idle" | "joining" | "joined" | "not-found" | "error";
 type CatchUpState = "idle" | "loading" | "done" | "no-transcript" | "flagged";
+type SyncState = "idle" | "syncing" | "synced" | "error";
+type CatchUpSignal = { id: string; summary: string; topic: string };
 
 function getOrCreateStudentId() {
   if (typeof window === "undefined") return "";
@@ -31,13 +34,14 @@ export default function StudentJoinPage() {
   const [sessionState, setSessionState] = useState<SessionState>("idle");
   const [className, setClassName] = useState<string | null>(null);
   const [liveTranscript, setLiveTranscript] = useState("");
+  const latestTranscriptRef = useRef("");
 
   const [catchUpState, setCatchUpState] = useState<CatchUpState>("idle");
   const [catchUpError, setCatchUpError] = useState<string | null>(null);
   const [summary, setSummary] = useState<string | null>(null);
   const [topic, setTopic] = useState<string | null>(null);
-
-  const hasResolvedRef = useRef(false);
+  const [syncState, setSyncState] = useState<SyncState>("idle");
+  const [pendingSignal, setPendingSignal] = useState<CatchUpSignal | null>(null);
 
   useEffect(() => {
     setStudentId(getOrCreateStudentId());
@@ -46,8 +50,9 @@ export default function StudentJoinPage() {
   useEffect(() => {
     if (!sessionCode) return;
 
-    hasResolvedRef.current = false;
     setSessionState("joining");
+    latestTranscriptRef.current = "";
+    setLiveTranscript("");
     let unsubscribed = false;
 
     const unsubscribe = onSnapshot(
@@ -55,14 +60,17 @@ export default function StudentJoinPage() {
       (snapshot) => {
         if (unsubscribed) return;
         if (!snapshot.exists()) {
-          hasResolvedRef.current = true;
           setSessionState("not-found");
+          setClassName(null);
+          latestTranscriptRef.current = "";
+          setLiveTranscript("");
           return;
         }
-        hasResolvedRef.current = true;
         const data = snapshot.data() as { className?: string; liveTranscript?: string };
+        const nextTranscript = typeof data.liveTranscript === "string" ? data.liveTranscript : "";
         setClassName(data.className ?? null);
-        setLiveTranscript(data.liveTranscript ?? "");
+        latestTranscriptRef.current = nextTranscript;
+        setLiveTranscript(nextTranscript);
         setSessionState("joined");
       },
       () => {
@@ -87,19 +95,64 @@ export default function StudentJoinPage() {
     setSessionCode(null);
     setSessionState("idle");
     setClassName(null);
+    latestTranscriptRef.current = "";
     setLiveTranscript("");
     setCatchUpState("idle");
     setCatchUpError(null);
     setSummary(null);
     setTopic(null);
+    setSyncState("idle");
+    setPendingSignal(null);
     setCodeInput("");
+  }
+
+  async function syncCatchUpSignal(signal: CatchUpSignal) {
+    if (!sessionCode || !studentId) throw new Error("The session is not ready to sync.");
+
+    const batch = writeBatch(db);
+    const timestamp = serverTimestamp();
+    batch.set(doc(db, "sessions", sessionCode, "pings", signal.id), {
+      createdAt: timestamp,
+      studentId,
+      topic: signal.topic,
+      summary: signal.summary,
+    });
+    batch.set(
+      doc(db, "sessions", sessionCode, "students", studentId),
+      {
+        studentId,
+        topic: signal.topic,
+        summary: signal.summary,
+        lastCatchUpAt: timestamp,
+        catchUpCount: increment(1),
+      },
+      { merge: true }
+    );
+    await batch.commit();
+  }
+
+  async function retrySignalSync() {
+    if (!pendingSignal || syncState === "syncing") return;
+    setSyncState("syncing");
+    try {
+      await syncCatchUpSignal(pendingSignal);
+      setPendingSignal(null);
+      setSyncState("synced");
+    } catch {
+      setSyncState("error");
+    }
   }
 
   async function handleCatchMeUp() {
     if (!sessionCode || !studentId || catchUpState === "loading") return;
+    const transcriptSnippet = latestTranscriptRef.current.trim();
     setCatchUpError(null);
+    setSummary(null);
+    setTopic(null);
+    setSyncState("idle");
+    setPendingSignal(null);
 
-    if (!liveTranscript.trim()) {
+    if (!transcriptSnippet) {
       setCatchUpState("no-transcript");
       return;
     }
@@ -112,44 +165,56 @@ export default function StudentJoinPage() {
     let newSummary = "";
     let newTopic = "General";
     let aiFailed = false;
+    let aiError = "";
 
     try {
       const res = await fetch("/api/catch-me-up", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ transcriptSnippet: liveTranscript, studentId }),
+        body: JSON.stringify({ transcriptSnippet }),
       });
-
-      if (res.ok) {
-        const data = (await res.json()) as { summary?: string; topic?: string };
-        newSummary = data.summary ?? "";
-        newTopic = data.topic ?? "General";
-      } else {
+      const result = (await res.json().catch(() => ({}))) as {
+        recap?: string;
+        summary?: string;
+        topic?: string;
+        error?: string;
+      };
+      if (!res.ok) {
         aiFailed = true;
+        aiError = result.error || "The AI recap service could not respond.";
+      } else {
+        newSummary = (result.summary || result.recap || "").trim();
+        newTopic = result.topic?.trim() || "General";
+        if (!newSummary) {
+          aiFailed = true;
+          aiError = "Anchor couldn't find enough clear lecture audio to create a recap yet.";
+        }
       }
     } catch {
       aiFailed = true;
+      aiError = "The AI recap service could not be reached.";
     }
 
     setSummary(newSummary);
     setTopic(newTopic);
     setCatchUpState(aiFailed ? "flagged" : "done");
     if (aiFailed) {
-      setCatchUpError("Couldn't generate an AI summary right now, but we've flagged you as stuck to your teacher.");
+      setCatchUpError(`${aiError} Your teacher will still receive your anonymous help signal.`);
     }
 
+    const signal = { id: crypto.randomUUID(), summary: newSummary, topic: newTopic };
+    setPendingSignal(signal);
+    setSyncState("syncing");
     try {
-      await addDoc(collection(db, "sessions", sessionCode, "pings"), {
-        createdAt: serverTimestamp(),
-        studentId,
-        topic: newTopic,
-        summary: newSummary,
-      });
+      await syncCatchUpSignal(signal);
+      setPendingSignal(null);
+      setSyncState("synced");
     } catch {
-      // the local UI state above already reflects the attempt; a failed
-      // ping write shouldn't block the student from seeing that
+      setSyncState("error");
     }
   }
+
+  const transcriptWordCount = liveTranscript.trim() ? liveTranscript.trim().split(/\s+/).length : 0;
 
   if (!sessionCode || sessionState === "not-found") {
     return (
@@ -186,6 +251,14 @@ export default function StudentJoinPage() {
               We couldn&apos;t find a session with that code. Double check with your teacher.
             </div>
           )}
+
+          <Link
+            href="/student"
+            className="mt-8 inline-flex items-center text-sm text-stone-400 transition-colors hover:text-gold hover:underline hover:underline-offset-4"
+          >
+            Not joining a live class? Record and study a lecture solo instead&nbsp;
+            <span aria-hidden="true">→</span>
+          </Link>
         </div>
       </main>
     );
@@ -240,6 +313,20 @@ export default function StudentJoinPage() {
             Tap the button below and Anchor will summarize the last few minutes of class for you.
           </p>
 
+          <div
+            className={`mt-6 flex items-center justify-center gap-2 rounded-full border px-4 py-2 text-xs ${
+              transcriptWordCount
+                ? "border-emerald-400/20 bg-emerald-400/[0.06] text-emerald-300"
+                : "border-white/10 bg-white/[0.03] text-stone-400"
+            }`}
+            aria-live="polite"
+          >
+            <span className={transcriptWordCount ? "status-dot" : "h-2 w-2 rounded-full bg-stone-600"} />
+            {transcriptWordCount
+              ? `Firebase transcript live · ${transcriptWordCount} words available`
+              : "Waiting for your teacher to start sharing audio"}
+          </div>
+
           <button
             type="button"
             onClick={handleCatchMeUp}
@@ -250,15 +337,21 @@ export default function StudentJoinPage() {
           </button>
 
           {catchUpState === "no-transcript" && (
-            <div className="mt-8 rounded-2xl border border-white/10 bg-white/[0.03] px-6 py-5 text-left text-sm leading-6 text-stone-400">
-              Nothing&apos;s come through from your teacher&apos;s mic yet. Make sure they&apos;ve clicked
-              &quot;Share Tab Audio&quot; and have been talking for a few seconds, then try again.
+            <div role="status" className="mt-8 rounded-2xl border border-white/10 bg-white/[0.03] px-6 py-5 text-left text-sm leading-6 text-stone-400">
+              <p>Nothing&apos;s come through from your teacher&apos;s mic yet. Make sure they&apos;ve clicked &quot;Share Tab Audio&quot; and have been talking for a few seconds.</p>
+              <button type="button" onClick={handleCatchMeUp} className="mt-2 font-semibold text-gold underline underline-offset-4">Try again</button>
             </div>
           )}
 
           {catchUpState === "flagged" && (
-            <div className="mt-8 rounded-2xl border border-red-500/30 bg-red-500/[0.06] px-6 py-5 text-left text-sm leading-6 text-red-300">
-              {catchUpError}
+            <div role="alert" className="mt-6 rounded-2xl border border-red-500/30 bg-red-500/[0.06] px-5 py-3 text-sm text-red-300">
+              <p>{catchUpError}</p>
+              {syncState === "syncing" && <p className="mt-2 text-xs text-red-200">Notifying your teacher…</p>}
+              {syncState === "synced" && <p className="mt-2 text-xs text-emerald-300">✓ Teacher dashboard updated live</p>}
+              {syncState === "error" && (
+                <button type="button" onClick={retrySignalSync} className="mt-2 font-semibold text-red-200 underline underline-offset-4">Retry teacher notification</button>
+              )}
+              <button type="button" onClick={handleCatchMeUp} className="mt-2 ml-3 font-semibold text-red-200 underline underline-offset-4">Try AI recap again</button>
             </div>
           )}
 
@@ -271,6 +364,24 @@ export default function StudentJoinPage() {
               <p className="mt-4 text-base leading-7 text-stone-200">
                 {summary || "Nothing notable came up in the last few minutes — you're not missing much."}
               </p>
+              {syncState === "syncing" && (
+                <p className="mt-4 text-xs text-stone-500" role="status">Updating your teacher&apos;s live dashboard…</p>
+              )}
+              {syncState === "synced" && (
+                <p className="mt-4 text-xs text-emerald-300" role="status">✓ Teacher dashboard updated live</p>
+              )}
+              {syncState === "error" && (
+                <div className="mt-4 rounded-xl border border-amber-400/25 bg-amber-400/[0.06] px-4 py-3 text-sm text-amber-200" role="alert">
+                  <p>Your recap is ready, but the anonymous class signal did not sync.</p>
+                  <button
+                    type="button"
+                    onClick={retrySignalSync}
+                    className="mt-2 font-semibold underline underline-offset-4"
+                  >
+                    Retry dashboard sync
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </section>

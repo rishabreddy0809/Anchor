@@ -33,6 +33,7 @@ const RECORDING_CHUNK_MS = 7000;
 
 type TranscriptChunk = { text: string; ts: number };
 type Ping = { ts: number; topic: string; summary: string };
+type StudentSignal = { studentId: string; ts: number; topic: string; summary: string };
 
 function generateSessionCode() {
   const letters = "ABCDEFGHJKLMNPQRSTUVWXYZ";
@@ -81,6 +82,8 @@ export default function TeacherDashboard() {
   const [createError, setCreateError] = useState<string | null>(null);
 
   const [pings, setPings] = useState<Ping[]>([]);
+  const [studentSignals, setStudentSignals] = useState<StudentSignal[]>([]);
+  const [peerMatchError, setPeerMatchError] = useState(false);
   const [connectionState, setConnectionState] = useState<ConnectionState>("connecting");
   const [now, setNow] = useState(() => Date.now());
 
@@ -173,7 +176,11 @@ export default function TeacherDashboard() {
         const formData = new FormData();
         formData.append("audio", event.data, "chunk.webm");
         const res = await fetch("/api/transcribe", { method: "POST", body: formData });
-        if (!res.ok) return;
+        if (!res.ok) {
+          const result = (await res.json().catch(() => ({}))) as { error?: string };
+          setAudioError(result.error || "Live transcription could not process this audio chunk.");
+          return;
+        }
         const { text } = (await res.json()) as { text?: string };
         if (text && text.trim()) {
           transcriptChunksRef.current.push({ text: text.trim(), ts: Date.now() });
@@ -195,7 +202,9 @@ export default function TeacherDashboard() {
       const cutoff = Date.now() - THREE_MIN_MS;
       transcriptChunksRef.current = transcriptChunksRef.current.filter((chunk) => chunk.ts >= cutoff);
       const liveTranscript = transcriptChunksRef.current.map((chunk) => chunk.text).join(" ");
-      setDoc(doc(db, "sessions", sessionCode), { liveTranscript }, { merge: true }).catch(() => {});
+      setDoc(doc(db, "sessions", sessionCode), { liveTranscript }, { merge: true }).catch(() => {
+        setAudioError("The live transcript could not sync to students. Check the Firestore session permissions.");
+      });
     }, TRANSCRIPT_SYNC_MS);
 
     setAudioState("active");
@@ -240,6 +249,54 @@ export default function TeacherDashboard() {
     };
   }, [sessionCode]);
 
+  useEffect(() => {
+    if (!sessionCode) return;
+
+    setPeerMatchError(false);
+    let unsubscribed = false;
+    const fifteenMinAgo = Timestamp.fromMillis(Date.now() - FIFTEEN_MIN_MS);
+    const studentsQuery = query(
+      collection(db, "sessions", sessionCode, "students"),
+      where("lastCatchUpAt", ">=", fifteenMinAgo),
+      orderBy("lastCatchUpAt", "desc")
+    );
+
+    const unsubscribe = onSnapshot(
+      studentsQuery,
+      (snapshot) => {
+        if (unsubscribed) return;
+        const nextStudents = snapshot.docs
+          .map((studentDoc) => {
+            const data = studentDoc.data() as {
+              studentId?: string;
+              lastCatchUpAt?: Timestamp;
+              topic?: string;
+              summary?: string;
+            };
+            const ts = data.lastCatchUpAt?.toMillis();
+            if (ts === undefined) return null;
+            return {
+              studentId: data.studentId || studentDoc.id,
+              ts,
+              topic: data.topic?.trim() || "General",
+              summary: data.summary ?? "",
+            };
+          })
+          .filter((student): student is StudentSignal => student !== null);
+        setStudentSignals(nextStudents);
+        setPeerMatchError(false);
+      },
+      () => {
+        if (!unsubscribed) setPeerMatchError(true);
+      }
+    );
+
+    return () => {
+      unsubscribed = true;
+      unsubscribe();
+    };
+  }, [sessionCode]);
+
   const catchUpsLastFiveMin = useMemo(
     () => pings.filter((p) => p.ts >= now - FIVE_MIN_MS).length,
     [pings, now]
@@ -250,6 +307,18 @@ export default function TeacherDashboard() {
   const hasAnyPings = pings.length > 0;
 
   const topicCounts = useMemo(() => buildTopicCounts(pings), [pings]);
+  const peerMatches = useMemo(() => {
+    const studentsByTopic = new Map<string, Set<string>>();
+    for (const student of studentSignals) {
+      const students = studentsByTopic.get(student.topic) ?? new Set<string>();
+      students.add(student.studentId);
+      studentsByTopic.set(student.topic, students);
+    }
+    return Array.from(studentsByTopic.entries())
+      .map(([topic, students]) => ({ topic, count: students.size }))
+      .filter(({ count }) => count >= 2)
+      .sort((a, b) => b.count - a.count);
+  }, [studentSignals]);
 
   async function handleCreateSession(e: React.FormEvent) {
     e.preventDefault();
@@ -469,6 +538,45 @@ export default function TeacherDashboard() {
                     <span className="text-sm font-semibold text-gold">
                       {count} student{count === 1 ? "" : "s"} confused
                     </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </section>
+
+        <section className="signal-card mt-8">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <p className="text-xs font-semibold tracking-[0.22em] text-gold">PEER MATCHES</p>
+              <h2 className="mt-3 font-serif text-2xl tracking-[-0.03em] text-stone-50">
+                Students who may benefit from reviewing together
+              </h2>
+            </div>
+            <span className="text-xs text-stone-500">Anonymous · last 15 min</span>
+          </div>
+
+          <div className="mt-8">
+            {peerMatchError ? (
+              <div className="rounded-2xl border border-amber-400/25 bg-amber-400/[0.06] px-5 py-4 text-sm text-amber-200">
+                Peer matches could not sync. Check the Firestore students collection permissions.
+              </div>
+            ) : peerMatches.length === 0 ? (
+              <div className="flex flex-col items-center justify-center gap-3 py-10 text-center">
+                <span className="status-pill">
+                  <span className="status-dot" />
+                  Watching topics
+                </span>
+                <p className="text-lg text-stone-400">Matches appear when two or more students request help on the same topic.</p>
+              </div>
+            ) : (
+              <ul className="grid gap-3 md:grid-cols-2">
+                {peerMatches.map(({ topic, count }) => (
+                  <li key={topic} className="rounded-2xl border border-gold/20 bg-gold/[0.04] px-5 py-5">
+                    <p className="font-serif text-xl tracking-[-0.02em] text-stone-50">{topic}</p>
+                    <p className="mt-2 text-sm text-stone-400">
+                      {count} students are reviewing this concept
+                    </p>
                   </li>
                 ))}
               </ul>
