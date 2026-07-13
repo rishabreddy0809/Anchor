@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 
-const GEMINI_MODEL = "gemini-flash-latest";
+const OPENROUTER_MODEL = "google/gemini-2.5-flash";
 const TRANSCRIBE_PROMPT =
   "Transcribe the following audio exactly as spoken. Return only the transcript text, with no additional commentary or formatting. If there is no discernible speech, return an empty string.";
 
 export async function POST(req: NextRequest) {
-  const apiKey = process.env.GEMINI_API_KEY;
+  const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) {
-    return NextResponse.json({ error: "GEMINI_API_KEY is not configured" }, { status: 500 });
+    return NextResponse.json({ error: "OPENROUTER_API_KEY is not configured" }, { status: 500 });
   }
 
   const incomingForm = await req.formData();
@@ -18,26 +18,26 @@ export async function POST(req: NextRequest) {
 
   const base64Audio = Buffer.from(await audio.arrayBuffer()).toString("base64");
 
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-goog-api-key": apiKey,
-      },
-      body: JSON.stringify({
-        contents: [
-          {
-            parts: [
-              { text: TRANSCRIBE_PROMPT },
-              { inline_data: { mime_type: "audio/webm", data: base64Audio } },
-            ],
-          },
-        ],
-      }),
-    }
-  );
+  const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: OPENROUTER_MODEL,
+      temperature: 0,
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: TRANSCRIBE_PROMPT },
+            { type: "input_audio", input_audio: { data: base64Audio, format: "webm" } },
+          ],
+        },
+      ],
+    }),
+  });
 
   if (!response.ok) {
     const errorText = await response.text();
@@ -45,8 +45,8 @@ export async function POST(req: NextRequest) {
   }
 
   const data = (await response.json()) as {
-    candidates?: { content?: { parts?: { text?: string }[] } }[];
+    choices?: { message?: { content?: string } }[];
   };
-  const text = data.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+  const text = data.choices?.[0]?.message?.content?.trim() ?? "";
   return NextResponse.json({ text });
 }

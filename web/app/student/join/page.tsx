@@ -14,7 +14,7 @@ import { db } from "../../../lib/firebase";
 const STUDENT_ID_KEY = "anchor-student-id";
 
 type SessionState = "idle" | "joining" | "joined" | "not-found" | "error";
-type CatchUpState = "idle" | "loading" | "done" | "no-transcript" | "flagged";
+type CatchUpState = "idle" | "loading" | "done" | "flagged";
 type SyncState = "idle" | "syncing" | "synced" | "error";
 type CatchUpSignal = { id: string; summary: string; topic: string };
 
@@ -138,7 +138,8 @@ export default function StudentJoinPage() {
       await syncCatchUpSignal(pendingSignal);
       setPendingSignal(null);
       setSyncState("synced");
-    } catch {
+    } catch (err) {
+      console.error("[catch-me-up] retry ping sync failed", err);
       setSyncState("error");
     }
   }
@@ -151,12 +152,6 @@ export default function StudentJoinPage() {
     setTopic(null);
     setSyncState("idle");
     setPendingSignal(null);
-
-    if (!transcriptSnippet) {
-      setCatchUpState("no-transcript");
-      return;
-    }
-
     setCatchUpState("loading");
 
     // The "I'm stuck" signal should reach the teacher even if the AI summary
@@ -209,7 +204,8 @@ export default function StudentJoinPage() {
       await syncCatchUpSignal(signal);
       setPendingSignal(null);
       setSyncState("synced");
-    } catch {
+    } catch (err) {
+      console.error("[catch-me-up] ping sync failed", err);
       setSyncState("error");
     }
   }
@@ -336,13 +332,6 @@ export default function StudentJoinPage() {
             {catchUpState === "loading" ? "Catching you up…" : "Catch Me Up"}
           </button>
 
-          {catchUpState === "no-transcript" && (
-            <div role="status" className="mt-8 rounded-2xl border border-white/10 bg-white/[0.03] px-6 py-5 text-left text-sm leading-6 text-stone-400">
-              <p>Nothing&apos;s come through from your teacher&apos;s mic yet. Make sure they&apos;ve clicked &quot;Share Tab Audio&quot; and have been talking for a few seconds.</p>
-              <button type="button" onClick={handleCatchMeUp} className="mt-2 font-semibold text-gold underline underline-offset-4">Try again</button>
-            </div>
-          )}
-
           {catchUpState === "flagged" && (
             <div role="alert" className="mt-6 rounded-2xl border border-red-500/30 bg-red-500/[0.06] px-5 py-3 text-sm text-red-300">
               <p>{catchUpError}</p>
@@ -356,12 +345,12 @@ export default function StudentJoinPage() {
           )}
 
           {catchUpState === "done" && (
-            <div className="mt-8 rounded-2xl border border-gold/25 bg-white/[0.03] px-6 py-5 text-left">
-              <span className="status-pill">
+            <div className="mt-8 rounded-2xl border border-gold/25 bg-white/[0.04] px-7 py-7 text-left">
+              <span className="status-pill text-sm">
                 <span className="status-dot" />
                 {topic}
               </span>
-              <p className="mt-4 text-base leading-7 text-stone-200">
+              <p className="mt-5 text-lg leading-8 text-stone-100">
                 {summary || "Nothing notable came up in the last few minutes — you're not missing much."}
               </p>
               {syncState === "syncing" && (
