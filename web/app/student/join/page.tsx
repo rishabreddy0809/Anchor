@@ -13,7 +13,7 @@ import { db } from "../../../lib/firebase";
 const STUDENT_ID_KEY = "anchor-student-id";
 
 type SessionState = "idle" | "joining" | "joined" | "not-found" | "error";
-type CatchUpState = "idle" | "loading" | "done" | "error";
+type CatchUpState = "idle" | "loading" | "done" | "no-transcript" | "flagged";
 
 function getOrCreateStudentId() {
   if (typeof window === "undefined") return "";
@@ -97,8 +97,21 @@ export default function StudentJoinPage() {
 
   async function handleCatchMeUp() {
     if (!sessionCode || !studentId || catchUpState === "loading") return;
-    setCatchUpState("loading");
     setCatchUpError(null);
+
+    if (!liveTranscript.trim()) {
+      setCatchUpState("no-transcript");
+      return;
+    }
+
+    setCatchUpState("loading");
+
+    // The "I'm stuck" signal should reach the teacher even if the AI summary
+    // can't be generated right now, so the ping write is independent of the
+    // Gemini call's success.
+    let newSummary = "";
+    let newTopic = "General";
+    let aiFailed = false;
 
     try {
       const res = await fetch("/api/catch-me-up", {
@@ -107,30 +120,34 @@ export default function StudentJoinPage() {
         body: JSON.stringify({ transcriptSnippet: liveTranscript, studentId }),
       });
 
-      if (!res.ok) {
-        setCatchUpState("error");
-        setCatchUpError("Couldn't reach the catch-up assistant. Please try again.");
-        return;
+      if (res.ok) {
+        const data = (await res.json()) as { summary?: string; topic?: string };
+        newSummary = data.summary ?? "";
+        newTopic = data.topic ?? "General";
+      } else {
+        aiFailed = true;
       }
+    } catch {
+      aiFailed = true;
+    }
 
-      const { summary: newSummary, topic: newTopic } = (await res.json()) as {
-        summary?: string;
-        topic?: string;
-      };
+    setSummary(newSummary);
+    setTopic(newTopic);
+    setCatchUpState(aiFailed ? "flagged" : "done");
+    if (aiFailed) {
+      setCatchUpError("Couldn't generate an AI summary right now, but we've flagged you as stuck to your teacher.");
+    }
 
-      setSummary(newSummary ?? "");
-      setTopic(newTopic ?? "General");
-      setCatchUpState("done");
-
+    try {
       await addDoc(collection(db, "sessions", sessionCode, "pings"), {
         createdAt: serverTimestamp(),
         studentId,
-        topic: newTopic ?? "General",
-        summary: newSummary ?? "",
+        topic: newTopic,
+        summary: newSummary,
       });
     } catch {
-      setCatchUpState("error");
-      setCatchUpError("Something went wrong getting you caught up. Please try again.");
+      // the local UI state above already reflects the attempt; a failed
+      // ping write shouldn't block the student from seeing that
     }
   }
 
@@ -232,20 +249,27 @@ export default function StudentJoinPage() {
             {catchUpState === "loading" ? "Catching you up…" : "Catch Me Up"}
           </button>
 
-          {catchUpError && (
-            <div className="mt-6 rounded-2xl border border-red-500/30 bg-red-500/[0.06] px-5 py-3 text-sm text-red-300">
+          {catchUpState === "no-transcript" && (
+            <div className="mt-8 rounded-2xl border border-white/10 bg-white/[0.03] px-6 py-5 text-left text-sm leading-6 text-stone-400">
+              Nothing&apos;s come through from your teacher&apos;s mic yet. Make sure they&apos;ve clicked
+              &quot;Share Tab Audio&quot; and have been talking for a few seconds, then try again.
+            </div>
+          )}
+
+          {catchUpState === "flagged" && (
+            <div className="mt-8 rounded-2xl border border-red-500/30 bg-red-500/[0.06] px-6 py-5 text-left text-sm leading-6 text-red-300">
               {catchUpError}
             </div>
           )}
 
-          {catchUpState === "done" && summary !== null && (
+          {catchUpState === "done" && (
             <div className="mt-8 rounded-2xl border border-gold/25 bg-white/[0.03] px-6 py-5 text-left">
               <span className="status-pill">
                 <span className="status-dot" />
                 {topic}
               </span>
               <p className="mt-4 text-base leading-7 text-stone-200">
-                {summary || "It's been quiet — no new material to catch up on yet."}
+                {summary || "Nothing notable came up in the last few minutes — you're not missing much."}
               </p>
             </div>
           )}
